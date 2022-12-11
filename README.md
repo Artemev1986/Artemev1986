@@ -17,4 +17,4 @@ Here are some ideas to get you started:
 
 ![GitHub stats](http://github-profile-summary-cards.vercel.app/api/cards/profile-details?username=Artemev1986&theme=github)
 
-![](https://github-profile-summary-cards.vercel.app/api/cards/stats?username=Artemev1986&theme=solarized_dark) ![](https://github-profile-summary-cards.vercel.app/api/cards/repos-per-language?username=Artemev1986&theme=solarized_dark)
+![Anurag's GitHub stats](https://github-readme-stats.vercel.app/api?username=Artemev1986&show_icons=true) ![Top Langs](https://github-readme-stats.vercel.app/api/top-langs/?username=Artemev1986&layout=compact)
