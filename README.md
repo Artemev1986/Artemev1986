@@ -24,5 +24,4 @@ You can find me here:
 
 <a href="https://t.me/MikhailArtemev"><img src="https://img.shields.io/badge/Telegram-2CA5E0?style=for-the-badge&logo=telegram&logoColor=white"></a>
 
-## 👉 [My profile on LinkedIn](https://www.linkedin.com/in/mikhail-artemyev-b51331107) 👈
-[https://www.linkedin.com/in/mikhail-artemyev-b51331107](https://www.linkedin.com/in/mikhail-artemyev-b51331107)
+## [My profile on LinkedIn](https://www.linkedin.com/in/mikhail-artemyev-b51331107)
