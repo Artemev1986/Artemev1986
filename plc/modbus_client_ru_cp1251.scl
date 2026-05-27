@@ -2,25 +2,25 @@ FUNCTION_BLOCK "modbus_client"
 { S7_Optimized_Access := 'TRUE' }
 VERSION : 0.2
    VAR RETAIN
-      // TCP connection boiler 5 (set IP in Instance DB / at CPU startup)
+      // TCP-подключение к котлу 5 (IP задаётся в Instance DB / при старте CPU)
       boiler_server_5 {OriginalPartName := 'TCON_IP_v4'; LibVersion := '1.0'} : TCON_IP_v4;
-      // TCP connection boiler 6 (different IP, same Modbus port, usually 502)
+      // TCP-подключение к котлу 6 — другой IP, те же порты Modbus (обычно 502)
       boiler_server_6 {OriginalPartName := 'TCON_IP_v4'; LibVersion := '1.0'} : TCON_IP_v4;
    END_VAR
    VAR
-      // Single MB_CLIENT; boilers polled in sequence (CONNECT changes in CASE)
+      // Один клиент Modbus — опрос котлов по очереди (смена CONNECT в CASE)
       instModbus1 {OriginalPartName := 'MB_CLIENT_FB_1084_S71500'; LibVersion := '4.0'} : MB_CLIENT;
-      server_boiler_status_5 : Word;   // Last Modbus STATUS boiler 5 (0 = OK)
-      server_boiler_status_6 : Word;   // Last Modbus STATUS boiler 6 (0 = OK)
-      boiler_req_5 : Bool;             // Read request boiler 5
-      boiler_req_6 : Bool;             // Read request boiler 6
-      boiler_disc_5 : Bool;            // Disconnect boiler 5
-      boiler_disc_6 : Bool;            // Disconnect boiler 6
-      server_query : Int;              // Poll step 1..4
+      server_boiler_status_5 : Word;   // STATUS последней ошибки котла 5 (0 = OK)
+      server_boiler_status_6 : Word;   // STATUS последней ошибки котла 6 (0 = OK)
+      boiler_req_5 : Bool;             // Запрос чтения котла 5
+      boiler_req_6 : Bool;             // Запрос чтения котла 6
+      boiler_disc_5 : Bool;            // Разрыв соединения котла 5
+      boiler_disc_6 : Bool;            // Разрыв соединения котла 6
+      server_query : Int;              // Шаг цикла: 1..4
    END_VAR
 
 BEGIN
-	// Cycle: 1 HR boiler5, 2 coils boiler5, 3 HR boiler6, 4 coils boiler6
+	// Цикл: 1 — HR котёл 5, 2 — coils котёл 5, 3 — HR котёл 6, 4 — coils котёл 6
 	IF #server_query <= 0 OR #server_query > 4 THEN
 	    #server_query := 1;
 	END_IF;
@@ -29,7 +29,7 @@ BEGIN
 	#boiler_req_6 := TRUE;
 
 	CASE #server_query OF
-	    // --- Boiler 5: holding registers 40001, length 4 ---
+	    // --- Котёл 5: holding registers 40001, длина 4 ---
 	    1:
 	        #instModbus1(REQ := #boiler_req_5,
 	                     DISCONNECT := #boiler_disc_5,
@@ -49,7 +49,7 @@ BEGIN
 	            #server_query := #server_query + 1;
 	        END_IF;
 
-	    // --- Boiler 5: coils from address 1, length 24 ---
+	    // --- Котёл 5: coils с адреса 1, длина 24 ---
 	    2:
 	        #instModbus1(REQ := #boiler_req_5,
 	                     DISCONNECT := #boiler_disc_5,
@@ -69,7 +69,7 @@ BEGIN
 	            #server_query := #server_query + 1;
 	        END_IF;
 
-	    // --- Boiler 6: holding registers 40001, length 4 (same addresses as boiler 5) ---
+	    // --- Котёл 6: holding registers 40001, длина 4 (адреса как у котла 5) ---
 	    3:
 	        #instModbus1(REQ := #boiler_req_6,
 	                     DISCONNECT := #boiler_disc_6,
@@ -89,7 +89,7 @@ BEGIN
 	            #server_query := #server_query + 1;
 	        END_IF;
 
-	    // --- Boiler 6: coils from address 1, length 24 ---
+	    // --- Котёл 6: coils с адреса 1, длина 24 ---
 	    4:
 	        #instModbus1(REQ := #boiler_req_6,
 	                     DISCONNECT := #boiler_disc_6,
@@ -101,7 +101,7 @@ BEGIN
 
 	        IF #instModbus1.ERROR THEN
 	            #server_boiler_status_6 := #instModbus1.STATUS;
-	            #server_query := #server_query + 1;   // after step 4 wraps to 1 (see IF above)
+	            #server_query := #server_query + 1;   // после 4 сбросится в 1 (см. IF в начале)
 	        END_IF;
 
 	        IF #instModbus1.DONE THEN
