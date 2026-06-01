@@ -1,0 +1,208 @@
+FUNCTION_BLOCK "motors"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.3
+   VAR_INPUT
+      start : Bool := false;   // Старт работы автоматического переключения устройств
+      permit : Array[0..#quantity_max] of Bool;   // Разрешение на работу устройства (готовность)
+      error : Array[0..#quantity_max] of Bool;   // Авария устройства
+      work : Array[0..#quantity_max] of Bool;   // Обратная связь о работе устройства (фактически работает)
+   END_VAR
+
+   VAR_INPUT RETAIN
+      time_on : Real := 0.001;   // Максимальный интервал непрерывной наработки (в часах) до ротации
+      quantity : Int := 0;   // Количество одновременно работающих насосов (0 -> 1 насос, 1 -> 2 насоса и т.д.)
+   END_VAR
+
+   VAR_OUTPUT
+      operating_time : Array[0..#quantity_max] of Real;   // Общая наработка устройств (в часах)
+      "device_on_" : Array[0..#quantity_max] of Bool;   // Выходные сигналы включения устройств (для внешних блоков)
+   END_VAR
+
+   VAR RETAIN
+      priority : Array[0..#quantity_max] of UInt;   // Динамический приоритет устройств (чем выше, тем скорее запустится)
+      priority_prev : Array[0..#quantity_max] of UInt;   // Приоритет на прошлом цикле (ручное изменение с HMI)
+   END_VAR
+
+   VAR
+      device_chose : Array[0..#quantity_max] of Bool;   // Предварительный выбор устройств для включения
+      device_on : Array[0..#quantity_max] of Bool;   // Внутренний сигнал включения устройства
+      current_time : Array[0..#quantity_max] of DInt;   // Текущее время непрерывной работы устройства (в секундах)
+   END_VAR
+
+   VAR RETAIN
+      total_time : Array[0..#quantity_max] of DInt;   // Общее время наработки устройства (в секундах)
+      error_prev : Array[0..#quantity_max] of Bool;   // Предыдущее состояние аварии (для фронта)
+   END_VAR
+
+   VAR
+      one_sec_front {OriginalPartName := 'R_TRIG_1500'; LibVersion := '1.0'} : R_TRIG;   // Триггер для формирования импульса раз в секунду
+   END_VAR
+
+   VAR_TEMP
+      i : Int;   // Индекс основного цикла
+      j : Int;   // Вспомогательный индекс
+      k : Int;   // Номер выбираемого устройства (0..quantity)
+      priority_temp : UInt;   // Текущий максимальный приоритет при поиске
+      priority_max : UInt;   // Максимальный приоритет в системе (для нормализации)
+      priority_min : UInt;   // Минимальный приоритет в системе (для нормализации)
+      ind : Array[0..#quantity_max] of Int;   // Индексы выбранных устройств
+      best_idx : Int;   // Индекс найденного устройства (-1: не найдено)
+      already_selected : Bool;   // Устройство уже выбрано на предыдущем шаге
+      rotate_needed : Array[0..#quantity_max] of Bool;   // Требуется сброс приоритета устройства
+      rotate_any : Bool;   // В текущем цикле есть хотя бы одно устройство для ротации
+      duty_active : Bool;   // Устройство было в очереди на работу (команда или выбор)
+      current_time_h : Array[0..#quantity_max] of Real;   // Текущее время непрерывной работы (в часах)
+   END_VAR
+
+   VAR CONSTANT
+      quantity_max : Int := 5;   // Максимальный индекс массива (всего 6 устройств: от 0 до 5)
+      priority_normalize_limit : UInt := 30000;   // Порог нормализации приоритетов (защита от переполнения UInt)
+   END_VAR
+
+
+BEGIN
+	// ==========================================
+	// 1. РАСЧЕТ НАРАБОТКИ ВРЕМЕНИ (РАЗ В СЕКУНДУ)
+	// ==========================================
+	#one_sec_front(CLK := "Clock_1Hz");
+
+	FOR #i := 0 TO #quantity_max DO
+	    IF #one_sec_front.Q THEN
+	        IF #device_on[#i] OR #work[#i] THEN
+	            #total_time[#i] := #total_time[#i] + 1;
+	            #current_time[#i] := #current_time[#i] + 1;
+	        END_IF;
+
+	        #operating_time[#i] := LREAL_TO_REAL(DINT_TO_LREAL(#total_time[#i]) / 3600.0);
+	        #current_time_h[#i] := LREAL_TO_REAL(DINT_TO_LREAL(#current_time[#i]) / 3600.0);
+	    END_IF;
+	END_FOR;
+
+	// ==========================================
+	// 2. РОТАЦИЯ И СДВИГ ПРИОРИТЕТОВ (ОДИН РАЗ ЗА ЦИКЛ PLC)
+	// ==========================================
+	#rotate_any := FALSE;
+
+	FOR #i := 0 TO #quantity_max DO
+	    // duty_active: команда или выбор (без work — иначе ротация по аварии на каждом цикле)
+	    #duty_active := #device_on[#i] OR #device_chose[#i];
+
+	    // Авария / снятие разрешения: ротация по команде или выбору (не по work каждый цикл)
+	    #rotate_needed[#i] := #duty_active
+	                          AND (#error[#i] OR NOT #permit[#i]);
+
+	    // Ротация по наработке: как в исходной версии
+	    #rotate_needed[#i] := #rotate_needed[#i]
+	                          OR ((#device_on[#i] OR #work[#i])
+	                              AND (#current_time_h[#i] >= #time_on)
+	                              AND #work[#i]);
+
+	    // Фронт аварии при ещё идущей работе (если device_on уже погас)
+	    #rotate_needed[#i] := #rotate_needed[#i]
+	                          OR (#error[#i]
+	                              AND NOT #error_prev[#i]
+	                              AND #work[#i]);
+
+	    // Ручное снижение приоритета с HMI — сдвиг очереди для этого устройства
+	    IF (#priority[#i] < #priority_prev[#i]) AND #duty_active THEN
+	        #rotate_needed[#i] := TRUE;
+	    END_IF;
+
+	    IF #rotate_needed[#i] THEN
+	        #rotate_any := TRUE;
+	    END_IF;
+	END_FOR;
+
+	IF #rotate_any THEN
+	    // Один общий сдвиг очереди за scan, даже если отключилось несколько устройств
+	    FOR #j := 0 TO #quantity_max DO
+	        #priority[#j] := #priority[#j] + 1;
+	    END_FOR;
+
+	    FOR #i := 0 TO #quantity_max DO
+	        IF #rotate_needed[#i] THEN
+	            #priority[#i] := 1;
+	            #current_time[#i] := 0;
+	        END_IF;
+	    END_FOR;
+
+	    // Нормализация приоритетов при приближении к переполнению UInt
+	    #priority_max := 0;
+	    #priority_min := 65535;
+
+	    FOR #i := 0 TO #quantity_max DO
+	        IF #priority[#i] > #priority_max THEN
+	            #priority_max := #priority[#i];
+	        END_IF;
+	        IF #priority[#i] < #priority_min THEN
+	            #priority_min := #priority[#i];
+	        END_IF;
+	    END_FOR;
+
+	    IF #priority_max > #priority_normalize_limit THEN
+	        FOR #i := 0 TO #quantity_max DO
+	            #priority[#i] := (#priority[#i] - #priority_min) + 1;
+	        END_FOR;
+	    END_IF;
+	END_IF;
+
+	FOR #i := 0 TO #quantity_max DO
+	    #error_prev[#i] := #error[#i];
+	    #priority_prev[#i] := #priority[#i];
+	END_FOR;
+
+	// ==========================================
+	// 3. ВЫБОР УСТРОЙСТВ ПО ПРИОРИТЕТУ (TOP-N)
+	// ==========================================
+	FOR #i := 0 TO #quantity_max DO
+	    #device_chose[#i] := FALSE;
+	END_FOR;
+
+	IF (#quantity >= 0) AND (#quantity <= #quantity_max) THEN
+	    IF #quantity = #quantity_max THEN
+	        // Режим "все устройства"
+	        FOR #j := 0 TO #quantity_max DO
+	            #device_chose[#j] := NOT #error[#j] AND #permit[#j];
+	        END_FOR;
+	    ELSE
+	        // Нужно выбрать (#quantity + 1) устройств с наибольшим приоритетом
+	        FOR #k := 0 TO #quantity DO
+	            #priority_temp := 0;
+	            #best_idx := -1;
+
+	            FOR #i := 0 TO #quantity_max DO
+	                IF NOT #error[#i] AND #permit[#i] THEN
+	                    #already_selected := FALSE;
+
+	                    FOR #j := 0 TO #k - 1 DO
+	                        IF #ind[#j] = #i THEN
+	                            #already_selected := TRUE;
+	                        END_IF;
+	                    END_FOR;
+
+	                    // best_idx < 0: выбрать первый допустимый (в т.ч. при priority = 0)
+	                    IF NOT #already_selected
+	                       AND ((#best_idx < 0) OR (#priority[#i] > #priority_temp)) THEN
+	                        #priority_temp := #priority[#i];
+	                        #best_idx := #i;
+	                    END_IF;
+	                END_IF;
+	            END_FOR;
+
+	            IF #best_idx >= 0 THEN
+	                #ind[#k] := #best_idx;
+	                #device_chose[#best_idx] := TRUE;
+	            END_IF;
+	        END_FOR;
+	    END_IF;
+	END_IF;
+
+	// ==========================================
+	// 4. ФОРМИРОВАНИЕ ФИНАЛЬНЫХ СИГНАЛОВ УПРАВЛЕНИЯ
+	// ==========================================
+	FOR #i := 0 TO #quantity_max DO
+	    #device_on[#i] := #device_chose[#i] AND #start AND #permit[#i] AND NOT #error[#i];
+	    #"device_on_"[#i] := #device_on[#i];
+	END_FOR;
+
+END_FUNCTION_BLOCK
