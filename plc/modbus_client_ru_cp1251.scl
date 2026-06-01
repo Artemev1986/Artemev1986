@@ -1,0 +1,113 @@
+FUNCTION_BLOCK "modbus_client"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.2
+   VAR RETAIN
+      // TCP-подключение к котлу 5 (IP задаётся в Instance DB / при старте CPU)
+      boiler_server_5 {OriginalPartName := 'TCON_IP_v4'; LibVersion := '1.0'} : TCON_IP_v4;
+      // TCP-подключение к котлу 6 — другой IP, те же порты Modbus (обычно 502)
+      boiler_server_6 {OriginalPartName := 'TCON_IP_v4'; LibVersion := '1.0'} : TCON_IP_v4;
+   END_VAR
+   VAR
+      // Один клиент Modbus — опрос котлов по очереди (смена CONNECT в CASE)
+      instModbus1 {OriginalPartName := 'MB_CLIENT_FB_1084_S71500'; LibVersion := '4.0'} : MB_CLIENT;
+      server_boiler_status_5 : Word;   // STATUS последней ошибки котла 5 (0 = OK)
+      server_boiler_status_6 : Word;   // STATUS последней ошибки котла 6 (0 = OK)
+      boiler_req_5 : Bool;             // Запрос чтения котла 5
+      boiler_req_6 : Bool;             // Запрос чтения котла 6
+      boiler_disc_5 : Bool;            // Разрыв соединения котла 5
+      boiler_disc_6 : Bool;            // Разрыв соединения котла 6
+      server_query : Int;              // Шаг цикла: 1..4
+   END_VAR
+
+BEGIN
+	// Цикл: 1 — HR котёл 5, 2 — coils котёл 5, 3 — HR котёл 6, 4 — coils котёл 6
+	IF #server_query <= 0 OR #server_query > 4 THEN
+	    #server_query := 1;
+	END_IF;
+
+	#boiler_req_5 := TRUE;
+	#boiler_req_6 := TRUE;
+
+	CASE #server_query OF
+	    // --- Котёл 5: holding registers 40001, длина 4 ---
+	    1:
+	        #instModbus1(REQ := #boiler_req_5,
+	                     DISCONNECT := #boiler_disc_5,
+	                     MB_MODE := 0,
+	                     MB_DATA_ADDR := 40001,
+	                     MB_DATA_LEN := 4,
+	                     MB_DATA_PTR := "modbus_data".Boiler_5,
+	                     CONNECT := #boiler_server_5);
+
+	        IF #instModbus1.ERROR THEN
+	            #server_boiler_status_5 := #instModbus1.STATUS;
+	            #server_query := #server_query + 1;
+	        END_IF;
+
+	        IF #instModbus1.DONE THEN
+	            #server_boiler_status_5 := 0;
+	            #server_query := #server_query + 1;
+	        END_IF;
+
+	    // --- Котёл 5: coils с адреса 1, длина 24 ---
+	    2:
+	        #instModbus1(REQ := #boiler_req_5,
+	                     DISCONNECT := #boiler_disc_5,
+	                     MB_MODE := 0,
+	                     MB_DATA_ADDR := 1,
+	                     MB_DATA_LEN := 24,
+	                     MB_DATA_PTR := "modbus_data".Boiler_coil_5,
+	                     CONNECT := #boiler_server_5);
+
+	        IF #instModbus1.ERROR THEN
+	            #server_boiler_status_5 := #instModbus1.STATUS;
+	            #server_query := #server_query + 1;
+	        END_IF;
+
+	        IF #instModbus1.DONE THEN
+	            #server_boiler_status_5 := 0;
+	            #server_query := #server_query + 1;
+	        END_IF;
+
+	    // --- Котёл 6: holding registers 40001, длина 4 (адреса как у котла 5) ---
+	    3:
+	        #instModbus1(REQ := #boiler_req_6,
+	                     DISCONNECT := #boiler_disc_6,
+	                     MB_MODE := 0,
+	                     MB_DATA_ADDR := 40001,
+	                     MB_DATA_LEN := 4,
+	                     MB_DATA_PTR := "modbus_data".Boiler_6,
+	                     CONNECT := #boiler_server_6);
+
+	        IF #instModbus1.ERROR THEN
+	            #server_boiler_status_6 := #instModbus1.STATUS;
+	            #server_query := #server_query + 1;
+	        END_IF;
+
+	        IF #instModbus1.DONE THEN
+	            #server_boiler_status_6 := 0;
+	            #server_query := #server_query + 1;
+	        END_IF;
+
+	    // --- Котёл 6: coils с адреса 1, длина 24 ---
+	    4:
+	        #instModbus1(REQ := #boiler_req_6,
+	                     DISCONNECT := #boiler_disc_6,
+	                     MB_MODE := 0,
+	                     MB_DATA_ADDR := 1,
+	                     MB_DATA_LEN := 24,
+	                     MB_DATA_PTR := "modbus_data".Boiler_coil_6,
+	                     CONNECT := #boiler_server_6);
+
+	        IF #instModbus1.ERROR THEN
+	            #server_boiler_status_6 := #instModbus1.STATUS;
+	            #server_query := #server_query + 1;   // после 4 сбросится в 1 (см. IF в начале)
+	        END_IF;
+
+	        IF #instModbus1.DONE THEN
+	            #server_boiler_status_6 := 0;
+	            #server_query := #server_query + 1;
+	        END_IF;
+	END_CASE;
+
+END_FUNCTION_BLOCK
